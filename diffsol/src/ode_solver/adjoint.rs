@@ -18,6 +18,12 @@ where
 {
     /// Apply the problem reset correction to the adjoint state at a checkpoint
     /// path boundary.
+    ///
+    /// This is the low-level "granular" hook for adjoint resets between checkpointing segments.
+    /// [`Self::solve_adjoint_backwards_pass`] applies this correction automatically at each
+    /// segment boundary using the matching forward states from either side of the root; you
+    /// only need to call it yourself when driving the backwards pass manually with
+    /// [`crate::OdeSolverMethod::step`].
     fn apply_reset_with_adjoint(
         &mut self,
         root_idx: usize,

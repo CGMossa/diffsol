@@ -173,6 +173,12 @@ impl<V: DefaultDenseMatrix> Solution<V> {
         Ok(())
     }
 
+    /// Create a new [`Solution`] targeting integration up to `t_final`, with output captured at
+    /// the solver's adaptive internal timesteps.
+    ///
+    /// Pair this with [`crate::OdeSolverMethod::solve_soln`] for multi-stage integrations: each
+    /// call appends new timesteps to the same allocation until `t_final` is reached or a root
+    /// fires. For dense evaluation at a fixed set of times, use [`Self::new_dense`] instead.
     pub fn new(t_final: V::T) -> Self {
         let ctx = V::C::default();
         Self {
@@ -188,6 +194,14 @@ impl<V: DefaultDenseMatrix> Solution<V> {
         }
     }
 
+    /// Create a new [`Solution`] targeting integration up to `t_evals.last()`, with output
+    /// captured by interpolation at each entry of `t_evals` (which must be strictly increasing).
+    ///
+    /// Pair this with [`crate::OdeSolverMethod::solve_soln`] or
+    /// [`crate::SensitivitiesOdeSolverMethod::solve_soln_sensitivities`] for multi-stage
+    /// integrations that need their output at a fixed set of times. The solution tracks how far
+    /// it has filled `t_evals` so successive calls resume at the next pending column. For
+    /// adaptive timesteps, use [`Self::new`] instead.
     pub fn new_dense(t_evals: Vec<V::T>) -> Result<Self, DiffsolError> {
         // check t_eval is increasing
         if t_evals.windows(2).any(|w| w[0] > w[1]) {

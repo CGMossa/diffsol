@@ -178,6 +178,11 @@ where
     /// `integrate_out` is set) `g` to that time and writing them into the current state.
     /// If the state contains sensitivity vectors they are also interpolated to time `t`.
     /// This is typically called after a root is found to pin the state to the root time.
+    ///
+    /// This is part of the low-level "granular" API. The high-level [`Self::solve`],
+    /// [`Self::solve_dense`], and [`Self::solve_soln`] pin the state to the root time and apply
+    /// the configured reset automatically; you only need to call `state_mut_back` yourself when
+    /// driving the solver with [`Self::step`].
     fn state_mut_back(&mut self, t: Eqn::T) -> Result<(), DiffsolError>;
 
     /// Apply the problem's configured reset operator to the current state.
@@ -206,6 +211,11 @@ where
     /// This is typically used after [`Self::state_mut_back`] has moved the solver to a root time.
     /// The helper recomputes `dy` from the problem RHS after updating the state vector and
     /// applies the root-time correction to each sensitivity vector.
+    ///
+    /// This is the low-level "granular" hook for sensitivity-aware resets. The high-level
+    /// [`crate::SensitivitiesOdeSolverMethod::solve_dense_sensitivities`] applies this reset
+    /// automatically at root events; you only need to call it yourself when driving the solver
+    /// with [`Self::step`].
     fn apply_reset_with_sens(&mut self, root_idx: usize) -> Result<(), DiffsolError>
     where
         Eqn: OdeEquationsImplicitSens,
