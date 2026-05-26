@@ -43,6 +43,7 @@
   - [Interpolation](./solve/interpolation.md)
   - [Stopping](./solve/stopping.md)
   - [Forward Sensitivities](./solve/forward_sens.md)
+  - [Adjoint Sensitivities](./solve/adjoint_sens.md)
 - [Using Diffsol from other languages](./use/use_from_other_languages.md)
   - [Python](./use/python.md)
   - [C and other languages](./use/c.md)

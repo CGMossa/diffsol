@@ -195,7 +195,8 @@ impl<V: DefaultDenseMatrix> Solution<V> {
     }
 
     /// Create a new [`Solution`] targeting integration up to `t_evals.last()`, with output
-    /// captured by interpolation at each entry of `t_evals` (which must be strictly increasing).
+    /// captured by interpolation at each entry of `t_evals` (which must be in non-decreasing
+    /// order).
     ///
     /// Pair this with [`crate::OdeSolverMethod::solve_soln`] or
     /// [`crate::SensitivitiesOdeSolverMethod::solve_soln_sensitivities`] for multi-stage
