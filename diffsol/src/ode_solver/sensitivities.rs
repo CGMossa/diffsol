@@ -18,9 +18,22 @@ where
 {
     /// Continue solving ODE and forward sensitivities into an existing dense [`Solution`].
     ///
-    /// This method requires a [`Solution`] created with [`Solution::new_dense`]. It reuses the
+    /// This is the high-level "limited" entry point for multi-stage forward + forward-sensitivity
+    /// solves: it requires a [`Solution`] created with [`Solution::new_dense`] and reuses the
     /// solution's storage so staged integrations can stop on roots, apply resets or parameter
-    /// changes, and resume without reallocating the dense output buffers.
+    /// changes, and resume without reallocating the dense output buffers. Compared to driving
+    /// [crate::OdeSolverMethod::step] yourself, it runs the inner step loop, performs the
+    /// interpolation onto the requested `t_eval`, and pins the state to the root time so
+    /// [crate::OdeSolverMethod::apply_reset_with_sens] or external parameter changes can be
+    /// applied before resuming.
+    ///
+    /// # When to use
+    ///
+    /// Prefer this method when you have a multi-stage forward + sensitivity workflow that needs
+    /// to stop on roots and tweak the problem before continuing. If a single solve is enough,
+    /// prefer [Self::solve_dense_sensitivities]. For full per-step control, drop down to
+    /// [crate::OdeSolverMethod::step] / [crate::OdeSolverMethod::interpolate_sens] /
+    /// [crate::OdeSolverMethod::apply_reset_with_sens].
     fn solve_soln_sensitivities(mut self, soln: &mut Solution<Eqn::V>) -> Result<Self, DiffsolError>
     where
         Eqn::V: DefaultDenseMatrix,
@@ -80,16 +93,29 @@ where
     /// Solve the ODE and the forward sensitivity equations from the current time to `t_eval[t_eval.len()-1]`,
     /// evaluating at specified times.
     ///
-    /// This method integrates the system and returns the solution interpolated at the specified times.
-    /// The solver uses its own internal timesteps for accuracy, but the output is interpolated to the
-    /// requested evaluation times. This is useful when you need the solution at specific timepoints
-    /// and want the solver's adaptive stepping for accuracy.
+    /// This is the high-level "limited" entry point for combined forward + forward-sensitivity
+    /// solves: it owns the inner step loop, allocates the output and sensitivity matrices, and
+    /// returns the solution interpolated at the specified times. The solver uses its own
+    /// internal timesteps for accuracy, but the output is interpolated to the requested
+    /// evaluation times. This is useful when you need the solution at specific timepoints and
+    /// want the solver's adaptive stepping for accuracy.
     ///
     /// If a root function is provided, the solver will stop if any of the root function elements change sign.
     /// The internal state of the solver is set to the time that the zero-crossing occured.
     /// If both a root function and a sensitivity-aware reset operator are configured, roots are
     /// handled internally by applying the reset and continuing the integration until
     /// `t_eval[t_eval.len()-1]`.
+    ///
+    /// # When to use
+    ///
+    /// Prefer this method whenever you need the forward solution alongside its sensitivities at
+    /// a fixed set of timepoints. If you need multi-stage control (mutating parameters between
+    /// segments) use [Self::solve_soln_sensitivities] with a dense [Solution]. For full
+    /// per-step control, drive the solver yourself with
+    /// [crate::OdeSolverMethod::step] / [crate::OdeSolverMethod::interpolate_sens] /
+    /// [crate::OdeSolverMethod::apply_reset_with_sens]; you will then be responsible for the
+    /// step loop, the output allocation, and the per-root reset handling that this method
+    /// performs automatically.
     ///
     /// # Arguments
     /// - `t_eval`: A slice of times at which to evaluate the solution. Times should be in increasing order.

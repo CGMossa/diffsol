@@ -68,6 +68,22 @@ where
     /// and `n` is the number of timepoints. The i-th column of `dgdu_eval` is the gradient of `g_i` with respect to `u_i`.
     /// The input `t_eval` is a vector of length `n`, where the i-th element is the timepoint `t_i`.
     ///
+    /// # When to use
+    ///
+    /// This is the high-level "limited" driver for the adjoint backwards pass. It walks the
+    /// [`CheckpointingPath`] produced by the forward solve in reverse, integrates the adjoint
+    /// equations over each checkpointing segment, and applies the adjoint reset correction at
+    /// each segment boundary via [`Self::apply_reset_with_adjoint`]. Building this loop
+    /// correctly by hand is delicate — segment boundaries must coincide with forward reset
+    /// events and the adjoint corrections must be applied with the matching forward states from
+    /// either side of the root — so prefer this method whenever you can.
+    ///
+    /// If you need full per-step control of the backwards integration, you must replicate this
+    /// segment-walking and reset-correction logic yourself using
+    /// [`crate::OdeSolverMethod::step`], the segment metadata on the augmented equations, and
+    /// [`Self::apply_reset_with_adjoint`]. Reading the source of this method is the recommended
+    /// starting point.
+    ///
     #[allow(clippy::type_complexity)]
     fn solve_adjoint_backwards_pass(
         mut self,

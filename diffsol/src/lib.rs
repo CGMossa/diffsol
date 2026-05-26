@@ -61,17 +61,55 @@
 //! [OdeSolverProblem::tsit45]).
 //!
 //! See the [OdeSolverMethod] trait for a more detailed description of the available methods on
-//! each solver. Possible workflows are:
-//!    - Use the high-level functions [OdeSolverMethod::solve] or
-//!      [OdeSolverMethod::solve_dense] that will both initialise the problem and solve the problem up
-//!      to a specific time or a sequence of times.
-//!    - Use [Solution::new] or [Solution::new_dense] to create a new solution and step through
-//!      one or more solve segments using the [OdeSolverMethod::solve_soln] method.
-//!    - Use the [OdeSolverMethod::step] method to step the solution forward in time with an internal
-//!      time step chosen by the solver to meet the error tolerances.
-//!    - Use the [OdeSolverMethod::interpolate] method to interpolate the solution between he last two time steps.
-//!    - Use the [OdeSolverMethod::set_stop_time] method to stop the solver at a specific time
-//!      (i.e. this will override the internal time step so that the solver stops at the specified time).
+//! each solver. Diffsol exposes the solver through two complementary APIs:
+//!
+//! ### High-level "limited" API (recommended for most cases)
+//!
+//! The high-level methods integrate from the current time to a target time (or sequence of times)
+//! in a single call. Prefer them when you don't need to interleave custom logic between solver
+//! steps — they are concise, less error-prone, and bundle several behaviors that are awkward to
+//! reproduce by hand:
+//!   - they own the inner step loop and the output allocation,
+//!   - they keep the solver's adaptive error control intact across the whole integration,
+//!   - if both a root function and a reset operator are configured they apply the reset
+//!     automatically at the root time and continue integrating to the target,
+//!   - the `_with_checkpointing` variants record a [CheckpointingPath] split at reset events
+//!     suitable for adjoint pipelines.
+//!
+//! The available high-level methods are:
+//!   - [OdeSolverMethod::solve] — integrate to a final time, returning the solution at the
+//!     solver's adaptive timepoints.
+//!   - [OdeSolverMethod::solve_dense] — integrate to the last entry of `t_eval`, returning the
+//!     solution interpolated at the specified timepoints.
+//!   - [OdeSolverMethod::solve_soln] — multi-stage integration into an existing [Solution]; lets
+//!     you stop on roots, mutate parameters or state, and resume without reallocating output.
+//!   - [OdeSolverMethod::solve_with_checkpointing] /
+//!     [OdeSolverMethod::solve_dense_with_checkpointing] — as above, but also produce a
+//!     [CheckpointingPath] for adjoint sensitivity analysis.
+//!   - [SensitivitiesOdeSolverMethod::solve_dense_sensitivities] — forward solve coupled with the
+//!     forward sensitivity equations under shared error control.
+//!   - [AdjointOdeSolverMethod::solve_adjoint_backwards_pass] — backwards pass driver for adjoint
+//!     sensitivities.
+//!
+//! ### Lower-level "granular" API (full manual control)
+//!
+//! When you need to inspect or modify the solver between every step — for example to implement a
+//! custom event handler, to drive the integration from an external event loop, or to react to
+//! roots in a way that [OdeSolverMethod::apply_reset] cannot express — drop down to the granular
+//! API:
+//!   - [OdeSolverMethod::step] — advance one internal step.
+//!   - [OdeSolverMethod::set_stop_time] — force the next step to land exactly at a given time.
+//!   - [OdeSolverMethod::interpolate] (and its `_dy`, `_out`, `_sens` variants) — evaluate the
+//!     dense output between the last two steps.
+//!   - [OdeSolverMethod::state_mut_back], [OdeSolverMethod::apply_reset],
+//!     [OdeSolverMethod::apply_reset_with_sens] — pin the state to a root time and apply the
+//!     configured reset manually.
+//!   - [OdeSolverMethod::checkpoint] — snapshot the current state for later reuse.
+//!
+//! With the granular API you are responsible for the loop, for handling each
+//! [OdeSolverStopReason], and for any reset bookkeeping. The high-level methods above are written
+//! in terms of these primitives, so reading their source is a good template if you find yourself
+//! needing to step manually.
 //!
 //! ## DiffSL
 //!

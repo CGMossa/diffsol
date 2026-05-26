@@ -96,13 +96,28 @@ where
     /// - `InternalTimestep`: The solver has taken a step forward in time, the internal state of the solver is at time self.state().t
     /// - `RootFound(t_root)`: The solver has found a root at time `t_root`. Note that the internal state of the solver is at the internal time step `self.state().t`, *not* at time `t_root`.
     /// - `TstopReached`: The solver has reached the stop time set by [Self::set_stop_time], the internal state of the solver is at time `tstop`, which is the same as `self.state().t`
+    ///
+    /// This is the low-level "granular" entry point. Use it when you need to inspect or modify
+    /// the solver between every step (e.g. for custom event handling not expressible through a
+    /// reset operator). When you only need the full trajectory to a target time, prefer the
+    /// high-level [Self::solve], [Self::solve_dense], or [Self::solve_soln] — they bundle the
+    /// step loop, output allocation, and automatic reset handling.
     fn step(&mut self) -> Result<OdeSolverStopReason<Eqn::T>, DiffsolError>;
 
     /// Set a stop time for the solver. The solver will stop when the internal time reaches this time.
     /// Once it stops, the stop time is unset. If `tstop` is at or before the current internal time, an error is returned.
+    ///
+    /// This is part of the low-level "granular" API, intended for hand-rolled loops driving
+    /// [Self::step]. The high-level methods ([Self::solve], [Self::solve_dense], etc.) manage
+    /// the stop time for you and should be preferred when you don't need per-step control.
     fn set_stop_time(&mut self, tstop: Eqn::T) -> Result<(), DiffsolError>;
 
-    /// Interpolate the solution at a given time. This time should be between the current time and the last solver time step
+    /// Interpolate the solution at a given time. This time should be between the current time and the last solver time step.
+    ///
+    /// This is part of the low-level "granular" API, used to evaluate the solver's dense output
+    /// between the last two steps when you are driving the integration with [Self::step]. If you
+    /// just want the solution at a set of evaluation times, [Self::solve_dense] runs the inner
+    /// loop and the interpolation for you.
     fn interpolate(&self, t: Eqn::T) -> Result<Eqn::V, DiffsolError> {
         let nstates = self.problem().eqn.rhs().nstates();
         let mut y = Eqn::V::zeros(nstates, self.problem().context().clone());
@@ -172,6 +187,11 @@ where
     /// mass matrix, `dy` is set directly from `rhs(y, t)`. If a mass matrix is present,
     /// [`StateRefMut::set_consistent`] is called to ensure `y` and `dy` satisfy algebraic
     /// constraints.
+    ///
+    /// This is the low-level "granular" hook for resets. When you use [`Self::solve`],
+    /// [`Self::solve_dense`], or [`Self::solve_soln`], the same reset operator is applied
+    /// automatically at root events and the integration continues — you only need to call
+    /// `apply_reset` yourself if you are driving the solver with [`Self::step`].
     fn apply_reset(&mut self) -> Result<(), DiffsolError>
     where
         Eqn: OdeEquations,
@@ -199,13 +219,30 @@ where
 
     /// Solve the ODE from the current time to `final_time`.
     ///
-    /// This method integrates the system and returns the solution at adaptive timepoints chosen by the solver's
-    /// internal error control mechanism. This is useful when you want the minimal number of timepoints for a given accuracy.
+    /// This is one of the high-level "limited" entry points: it owns the inner step loop,
+    /// allocates the output matrix for you, and integrates the system returning the solution at
+    /// adaptive timepoints chosen by the solver's internal error control mechanism. This is
+    /// useful when you want the minimal number of timepoints for a given accuracy.
     ///
     /// If a root function is provided, the solver will stop if any of the root function elements change sign.
     /// The internal state of the solver is set to the time that the zero-crossing occured.
     /// If both a root function and a reset operator are configured, roots are handled internally by
     /// applying the reset and continuing the integration to `final_time`.
+    ///
+    /// # When to use
+    ///
+    /// Prefer this method whenever you just want the full trajectory from the current time to
+    /// `final_time` and do not need to interleave custom logic between solver steps. Compared to
+    /// driving the solver with [Self::step] and friends, it:
+    ///   - handles allocation of the returned solution matrix,
+    ///   - keeps adaptive error control intact across the whole integration,
+    ///   - applies the configured reset operator automatically at root events and continues
+    ///     integrating to `final_time`.
+    ///
+    /// If you need to mutate parameters or state between segments use [Self::solve_soln]; if you
+    /// need a checkpointing path for an adjoint pass use [Self::solve_with_checkpointing]; if you
+    /// need full per-step control drop down to [Self::step] / [Self::interpolate] /
+    /// [Self::set_stop_time] / [Self::apply_reset].
     ///
     /// # Arguments
     /// - `final_time`: The time to integrate to
@@ -259,9 +296,14 @@ where
 
     /// Continue solving into an existing [`Solution`], appending newly computed output.
     ///
-    /// This method is intended for multi-stage integrations where the caller may need to
+    /// This is the high-level "limited" entry point for multi-stage integrations: the caller can
     /// inspect [`Solution::stop_reason`], mutate the equations or state, and then resume the
-    /// solve by calling `solve_soln` again with the returned solver state.
+    /// solve by calling `solve_soln` again with the returned solver state. Compared to driving
+    /// [`Self::step`] yourself between stages, `solve_soln`:
+    ///   - reuses the [`Solution`]'s storage across stages so output buffers are not reallocated,
+    ///   - runs the inner step loop and adaptive error control for each stage,
+    ///   - pins the state to the root time on root events so [`Self::apply_reset`] or external
+    ///     parameter changes can be applied before resuming.
     ///
     /// The behavior depends on how the [`Solution`] was created:
     /// - If created with [`Solution::new`], this method behaves like [`Self::solve`], appending
@@ -274,6 +316,15 @@ where
     /// On return, `soln.stop_reason` contains the reason this stage stopped. If a root is found,
     /// the solver state is moved back to the root time in the same way as [`Self::solve`] and
     /// [`Self::solve_dense`], so the caller can apply resets or parameter changes before resuming.
+    ///
+    /// # When to use
+    ///
+    /// Prefer this method when you have a multi-stage workflow that needs to stop on roots or
+    /// fixed timepoints and tweak the problem before continuing — but where each stage is still
+    /// a normal solver run. If a single integration is enough, prefer [`Self::solve`] /
+    /// [`Self::solve_dense`]. If you need per-step control (e.g. custom event handling not
+    /// expressible through the reset operator), drop down to [`Self::step`] /
+    /// [`Self::interpolate`] / [`Self::set_stop_time`] / [`Self::apply_reset`].
     ///
     /// # Example
     /// ```
@@ -369,11 +420,22 @@ where
     /// Continue solving into an existing [`Solution`], appending newly computed
     /// output and checkpointing segments.
     ///
-    /// This has the same staged-solve behavior as [`Self::solve_soln`], but also
-    /// records a checkpointing segment for the call and appends it to the
-    /// caller-owned checkpointing path. A segment with
-    /// `terminal_reset_root_idx() == Some(root_idx)` ended at a root. A segment
-    /// with `None` ended at the configured stop time.
+    /// This is the high-level "limited" entry point that combines the multi-stage behavior of
+    /// [`Self::solve_soln`] with the checkpointing path machinery of
+    /// [`Self::solve_with_checkpointing`]. It runs the staged solve and additionally records a
+    /// checkpointing segment for the call and appends it to the caller-owned
+    /// [`CheckpointingPath`]. A segment with `terminal_reset_root_idx() == Some(root_idx)` ended
+    /// at a root. A segment with `None` ended at the configured stop time. The result is the
+    /// shape of [`CheckpointingPath`] required by
+    /// [`crate::AdjointOdeSolverMethod::solve_adjoint_backwards_pass`].
+    ///
+    /// # When to use
+    ///
+    /// Prefer this method when you need both multi-stage control (e.g. to mutate parameters
+    /// between stages) and a checkpointing path for an adjoint pass. If you only need one of
+    /// those, use [`Self::solve_soln`] or [`Self::solve_with_checkpointing`] /
+    /// [`Self::solve_dense_with_checkpointing`] instead. For per-step control you must build
+    /// the [`CheckpointingPath`] yourself; see the source of this method as a template.
     fn solve_soln_with_checkpointing(
         mut self,
         soln: &mut Solution<Eqn::V>,
@@ -437,15 +499,32 @@ where
 
     /// Solve the ODE from the current time to `t_eval[t_eval.len()-1]`, evaluating at specified times.
     ///
-    /// This method integrates the system and returns the solution interpolated at the specified times.
-    /// The solver uses its own internal timesteps for accuracy, but the output is interpolated to the
-    /// requested evaluation times. This is useful when you need the solution at specific timepoints
-    /// and want the solver's adaptive stepping for accuracy.
+    /// This is one of the high-level "limited" entry points: it owns the inner step loop,
+    /// allocates the output matrix for you, and returns the solution interpolated at the
+    /// specified times. The solver uses its own internal timesteps for accuracy, but the output
+    /// is interpolated to the requested evaluation times. This is useful when you need the
+    /// solution at specific timepoints and want the solver's adaptive stepping for accuracy.
     ///
     /// If a root function is provided, the solver will stop if any of the root function elements change sign.
     /// The internal state of the solver is set to the time that the zero-crossing occured.
     /// If both a root function and a reset operator are configured, roots are handled internally by
     /// applying the reset and continuing the integration until `t_eval[t_eval.len()-1]`.
+    ///
+    /// # When to use
+    ///
+    /// Prefer this method whenever you need the solution at a fixed set of timepoints and do not
+    /// need to interleave custom logic between solver steps. Compared to driving the solver with
+    /// [Self::step] / [Self::interpolate] yourself, it:
+    ///   - handles allocation of the returned solution matrix,
+    ///   - manages the interpolation onto `t_eval` (including writing the post-root column when
+    ///     no reset is configured),
+    ///   - applies the configured reset operator automatically at root events and continues
+    ///     integrating through the remaining evaluation times.
+    ///
+    /// If you need to mutate parameters or state between segments use [Self::solve_soln] with a
+    /// dense [Solution]; if you need a checkpointing path for an adjoint pass use
+    /// [Self::solve_dense_with_checkpointing]; if you need full per-step control drop down to
+    /// [Self::step] / [Self::interpolate] / [Self::set_stop_time] / [Self::apply_reset].
     ///
     /// # Arguments
     /// - `t_eval`: A slice of times at which to evaluate the solution. Times should be in increasing order.
@@ -506,8 +585,22 @@ where
 
     /// Solve the ODE from the current time to `final_time`, saving checkpoints at regular intervals.
     ///
-    /// This method is useful for adjoint sensitivity analysis, where you need to store the solution at
-    /// intermediate times to efficiently compute gradients.
+    /// This is the high-level "limited" entry point for forward integrations that feed an
+    /// adjoint backwards pass. Compared to [`Self::solve`] it additionally records a
+    /// [`CheckpointingPath`] split at reset events, which is what
+    /// [`crate::AdjointOdeSolverMethod::solve_adjoint_backwards_pass`] consumes. Building this
+    /// path correctly by hand from [`Self::checkpoint`] calls is awkward — segment boundaries
+    /// must coincide exactly with reset events for the adjoint reset corrections to apply at the
+    /// right times — so this method is the recommended way to produce one.
+    ///
+    /// # When to use
+    ///
+    /// Prefer this method whenever you intend to follow up with an adjoint sensitivity solve. If
+    /// you only need the forward trajectory, use [`Self::solve`] instead. If you need per-step
+    /// control of the forward pass while still feeding an adjoint solve, you must replicate the
+    /// segment-splitting bookkeeping manually using [`Self::step`], [`Self::checkpoint`],
+    /// [`Self::apply_reset`] and direct manipulation of a [`CheckpointingPath`] — reading the
+    /// source of this method is a good template.
     ///
     /// # Arguments
     /// - `final_time`: The time to integrate to
@@ -559,10 +652,23 @@ where
 
     /// Solve the ODE from the current time to `t_eval[t_eval.len()-1]` with checkpointing, evaluating at specified times.
     ///
-    /// This method is similar to [Self::solve_dense] but additionally saves checkpoints of the solver state
-    /// at regular intervals. Checkpointing enables efficient adjoint sensitivity analysis by storing the
-    /// forward integration state, allowing backward integration to compute gradients without recomputing
-    /// the entire forward solution.
+    /// This is the high-level "limited" entry point for forward integrations at fixed evaluation
+    /// times that feed an adjoint backwards pass. Compared to [Self::solve_dense] it additionally
+    /// saves checkpoints of the solver state at regular intervals and returns a
+    /// [`CheckpointingPath`] split at reset events, which is what
+    /// [`crate::AdjointOdeSolverMethod::solve_adjoint_backwards_pass`] consumes. Checkpointing
+    /// enables efficient adjoint sensitivity analysis by storing the forward integration state,
+    /// allowing backward integration to compute gradients without recomputing the entire forward
+    /// solution.
+    ///
+    /// # When to use
+    ///
+    /// Prefer this method whenever you intend to follow up with an adjoint sensitivity solve
+    /// over a fixed set of evaluation times. If you do not need adjoints, use [Self::solve_dense]
+    /// instead. If you need per-step control of the forward pass while still feeding an adjoint
+    /// solve you must replicate the segment-splitting bookkeeping manually using [Self::step],
+    /// [Self::checkpoint], [Self::apply_reset] and direct manipulation of a
+    /// [`CheckpointingPath`] — reading the source of this method is a good template.
     ///
     /// # Arguments
     /// - `t_eval`: A slice of times at which to evaluate the solution. Times should be in increasing order.
